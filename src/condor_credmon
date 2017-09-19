@@ -32,13 +32,16 @@ import tempfile
 import stat
 import traceback
 
-def setup_logging():
+def setup_logging(credential_dir):
     """
     Set-up logging for the cred monitor.
     """
     logger = logging.getLogger('credmon')
     logger.setLevel(logging.INFO)
-    log_file = htcondor.param.get('SEC_CREDENTIAL_MONITOR_LOG', '/var/log/condor/credmon.log')
+    if htcondor == None:
+        log_file = os.path.join(credential_dir, 'credmon.log')
+    else:
+        log_file = htcondor.param.get('SEC_CREDENTIAL_MONITOR_LOG', '/var/log/condor/credmon.log')
     cred_lfh = handlers.WatchedFileHandler(log_file)
     cred_lfh.setLevel(logging.DEBUG)
     cred_log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -297,7 +300,11 @@ def main():
     """
     Set-up signal catching and launch the credential monitor.
     """
-    logger = setup_logging()
+    if len(sys.argv) > 1:
+        credential_dir = sys.argv[1]
+    else:
+        credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
+    logger = setup_logging(credential_dir)
     logger.info('Starting Credmon and registering signals')
     if htcondor == None or scitokens == None:
         logger.info("I think I'm on a worker node because either htcondor or scitokens library was not found")
@@ -305,10 +312,7 @@ def main():
     signal.signal(signal.SIGTERM, partial(signal_handler, logger))
     signal.signal(signal.SIGINT, partial(signal_handler, logger))
     signal.signal(signal.SIGQUIT, partial(signal_handler, logger))
-    if len(sys.argv) > 1:
-        credential_dir = sys.argv[1]
-    else:
-        credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
+    
     credmon = CredentialMonitor(credential_dir)
     credmon.drop_pid()
     credmon.credmon_incomplete()
