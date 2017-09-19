@@ -11,6 +11,10 @@ import signal
 import time
 import fnmatch
 import htcondor
+import scitokens
+import tempfile
+import stat
+import traceback
 
 def setup_logging():
     """
@@ -18,7 +22,7 @@ def setup_logging():
     """
     logger = logging.getLogger('credmon')
     logger.setLevel(logging.INFO)
-    log_file = '/var/log/condor/credmon.log'
+    log_file = htcondor.param.get('SCITOKEN_CREDMON_LOG', '/var/log/condor/credmon.log')
     cred_lfh = handlers.WatchedFileHandler(log_file)
     cred_lfh.setLevel(logging.DEBUG)
     cred_log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -41,11 +45,13 @@ def signal_handler(logger, signum, frame):
 
 def should_renew(base, username):
     """
-    Determines the life left in the active kerberos TGT.
-    If no active TGT is found then it returns True.
-    If the life left on the TGT is 60 minutes or less then it
+    Determines the life left in the active SciToken.
+    If no active SciToken is found then it returns True.
+    If the life left on the SciToken is 60 minutes or less then it
     renews.
     """
+    return True
+    
     cc_file = os.path.join(base, '{0}.cc'.format(username))
     if not os.path.exists(cc_file):
         return True
@@ -55,95 +61,36 @@ def should_renew(base, username):
         return True
     return False
 
-def run_sys(pcmd, log, debug, prxec=None, stdin=None, env=None):
-    """
-    Abstracts out dealing with system calls to bash scripts.
 
-    Also handles pre-exec functions if they're required.
-    """
-    chld_p = Popen(pcmd, preexec_fn=prxec, stdout=PIPE, stderr=PIPE, stdin=PIPE, env=env)
-    chld_out, chld_err = chld_p.communicate(input=stdin)
-    if debug == True:## and chld_p.returncode != 0:
-        log.info(chld_out.decode().rstrip())
-        log.info(chld_err.decode().rstrip())
-    log.info('{0} returned {1}'.format(pcmd, chld_p.returncode))
-    return chld_p.returncode
-
-def demote(user_uid, user_gid):
-    """Pass the function 'set_ids' to preexec_fn, rather than just calling
-    setuid and setgid. This will change the ids for that subprocess only"""
-
-    def set_ids():
-        """
-        Demote the subprocess user to the target uid/gid combo.
-        """
-        os.setregid(user_gid, user_gid)
-        os.setreuid(user_uid, user_uid)
-    return set_ids
-
-class RenewPostAction(object):
-    """
-    Class to abstract dealing with any actions that need to occur after TGT
-    Renewal, such as aklog and others.
-    """
-
-    def __init__(self, program, debug, user_priv):
-        self.program = program
-        self.log = logging.getLogger('credmon.monitor.renew')
-        self.debug = debug
-        self.user_priv = user_priv
-
-    def _env(self, uid, gid):
-	return os.environ.copy()
-
-    def run(self, uid, gid):
-        """
-        Run the intended post action.
-        """
-	pre_exec = None
-	if self.user_priv:
-		self.log.info("demoting %s to run with uid %d" % (self.program, uid))
-		pre_exec = demote(uid, gid)
-        return run_sys(self.program, self.log, self.debug, pre_exec, env=self._env(uid, gid))
-
-class AkLogAction(RenewPostAction):
-
-    def _env(self, uid, gid):
-	env = os.environ.copy()
-	env["CONDOR_KRB5_UID"] = str(uid)
-        env["PATH"] = env["PATH"] + ":/usr/sue/bin"
-	return env
 
 class CredentialMonitor(object):
     """
-    CERN HTCondor Credential Monitor
+    SciTokens HTCondor Credential Monitor
 
     This program periodically or when SIGHUP'd scans the registered
-    credential directory for new opaque tokens and when found pushes
-    them to the Kerberos TGT retriever for a new/renewed TGT.
+    credential directory for new opaque tokens and when found creates
+    a SciToken.
 
     :param cred_dir: The credential directory to scan.
     :type cred_dir: str
     """
-    tgt_prog = ["/usr/bin/ngbatchauth", "--debug"]
 
     def __init__(self, cred_dir):
         self.cred_dir = cred_dir
         self.schedd = False
+        self._private_key_location = htcondor.param['SCITOKEN_PRIVATE_KEY']
+        with open(self._private_key_location, 'r') as private_key:
+            self._private_key = private_key.read()
+        self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
+        
         self._is_schedd()
         self.log = logging.getLogger('credmon.monitor')
-        self.post_actions = []
-        if self.schedd:
-            self.post_actions.append(AkLogAction(["/usr/bin/condor_aklog"], True, False))
-        else:
-            self.post_actions.append(AkLogAction(["/usr/bin/aklog"], True, True))
-        self.post_actions.append(RenewPostAction(["/usr/bin/eosfusebind", "-g"], True, True))
         self.debug = True
 
     def _is_schedd(self):
         try:
             schedd = htcondor.Schedd()
-        except RuntimeError, e:
+        except RuntimeError as e:
             schedd = None
         self.schedd = schedd
 
@@ -203,14 +150,14 @@ class CredentialMonitor(object):
             try:
                 os.remove(cred_file)
                 os.remove(cc_file)
-            except OSError, ose:
+            except OSError as ose:
                 pass
         mark_files = fnmatch.filter(os.listdir(self.cred_dir), '*.mark')
         for mark_file in mark_files:
             mark_path = os.path.join(self.cred_dir, mark_file)
             try:
                 os.remove(mark_path)
-            except OSError, ose:
+            except OSError as ose:
                 self.log.info(ose)
 
     def atomic_rename(self, tmp_file, target_file, username):
@@ -226,7 +173,7 @@ class CredentialMonitor(object):
         :rtype: bool
         """
         try:
-            os.chmod(tmp_file, 0400)
+            os.chmod(tmp_file, stat.S_IRUSR)
             os.chown(tmp_file, 0, 0)
             os.rename(tmp_file, target_file)
         except OSError:
@@ -242,61 +189,57 @@ class CredentialMonitor(object):
             err = 'Failed to chown tmp cc file to uid {0}'
             self.log.error(err.format(t_uid))
 
-    def tgt_callout(self, username, cred_path, tmp_file, target_file):
-        """
-        Call-out to the TGT renewal system and get a new TGT for the user.
-        """
-        with open(cred_path, 'r') as cred_fd:
-            opaque_cred = cred_fd.read()
-        msg_attempt = 'User {0} KRB5CCNAME {1} tmpfile {2}'
-        self.log.info(msg_attempt.format(username, target_file, tmp_file))
-        os.environ['USER'] = username
-	os.environ['KRB5CCNAME'] = 'FILE:{0}'.format(tmp_file)
-        tgt_rc = run_sys(self.tgt_prog, self.log, self.debug, stdin=opaque_cred)
-        return tgt_rc
 
-    def acquire_tgt(self, cred_path, base, username):
+    def acquire_scitoken(self, cred_path, base, username):
         """
-        Read in the opaque cred produced by the credential_producer.
-        Set the USER, and KRB5CCNAME ENV vars appropriately.
-        Finally, call out to the TGT renewer/generator.
+        Create the SciToken
         """
-        tmp_file = os.path.join(base, '{0}.cc.tmp'.format(username))
+        token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
+        token.update_claims({'sub': username})
+        user_path = os.path.join('/user', username)
+        token.update_claims({'paths': user_path})
+        token.update_claims({'authz': ['read', 'write']})
+        
+        # Serialize the token and write it to a file
+        serialized_token = token.serialize(issuer="https://scitokens.org/osg-connect", lifetime=60*20)
+        (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=base)
+        with os.fdopen(tmp_file_obj, "w") as open_file:
+            open_file.write(serialized_token)
+            
+        (tmp_file_obj, tmp_file2) = tempfile.mkstemp(dir=base)
+        with os.fdopen(tmp_file_obj, "w") as open_file:
+            open_file.write(serialized_token)
+
         target_file = os.path.join(base, '{0}.cc'.format(username))
-        tgt_rc = self.tgt_callout(username, cred_path, tmp_file, target_file)
-        if tgt_rc != 0:
-            return False
-	os.environ["KRB5CCNAME"] = 'FILE:{0}'.format(tmp_file)
         t_pwn = pwd.getpwnam(username)
         t_uid = t_pwn.pw_uid
         t_gid = t_pwn.pw_gid
         self.log.info('Executing under EUID: {0}'.format(t_uid))
-	if os.path.isfile(tmp_file):
-	    self.log.info("{0} exists".format(tmp_file))
-	else:
-	    self.log.info("{0} doesn't exist".format(tmp_file))
         self.re_own(tmp_file, t_uid, t_gid)
-        self.log.info(os.environ['KRB5CCNAME'])
-        for post_act in self.post_actions:
-	    post_act.run(t_uid, t_gid)
-        return self.atomic_rename(tmp_file, target_file, username)
+        self.re_own(tmp_file2, t_uid, t_gid)
+        
+        # Rename the cred_path (.cred) first, so condor doesn't cause
+        # a race condition and start copying over the unprepared .cred right
+        # when the .cc file shows up
+        return self.atomic_rename(tmp_file, cred_path, username) and self.atomic_rename(tmp_file2, target_file, username)
 
     def process_cred_file(self, cred_path):
         """
         Split out the file path to get username and base.
-        Pass that data to the tgt acquiring function.
+        Pass that data to the SciToken acquiring function.
         """
         base, file_name = os.path.split(cred_path)
         username = os.path.splitext(file_name)[0]
         if should_renew(base, username):
-            fnd_msg = 'Found {0}, acquiring TGT and .cc file'
+            fnd_msg = 'Found {0}, acquiring SciToken and .cc file'
             self.log.info(fnd_msg.format(cred_path))
-            success = self.acquire_tgt(cred_path, base, username)
+            success = self.acquire_scitoken(cred_path, base, username)
+            #success = self.acquire_tgt(cred_path, base, username)
             if success:
-                succ_msg = "Successfully renewed TGT for user: {0}"
+                succ_msg = "Successfully renewed SciToken for user: {0}"
                 self.log.info(succ_msg.format(username))
             else:
-                err_msg = "Failed to renew TGT for user: {0}"
+                err_msg = "Failed to renew SciToken for user: {0}"
                 self.log.error(err_msg.format(username))
         else:
             complete_name = os.path.join(self.cred_dir, 'CREDMON_COMPLETE')
@@ -335,7 +278,7 @@ def main():
     signal.signal(signal.SIGTERM, partial(signal_handler, logger))
     signal.signal(signal.SIGINT, partial(signal_handler, logger))
     signal.signal(signal.SIGQUIT, partial(signal_handler, logger))
-    credential_dir = '/etc/batch_credds'
+    credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
     credmon = CredentialMonitor(credential_dir)
     credmon.drop_pid()
     credmon.credmon_incomplete()
@@ -343,7 +286,7 @@ def main():
     while True:
         try:
             credmon.scan_tokens()
-        except Exception, unknown:
+        except Exception as unknown:
             logger.error(unknown)
         logger.info('Sleeping 60 seconds.')
         time.sleep(60)
