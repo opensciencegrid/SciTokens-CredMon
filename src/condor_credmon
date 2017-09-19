@@ -21,8 +21,13 @@ from functools import partial
 import signal
 import time
 import fnmatch
-import htcondor
-import scitokens
+try:
+    import htcondor
+    import scitokens
+except:
+    htcondor = None
+    scitokens = None
+    pass
 import tempfile
 import stat
 import traceback
@@ -89,13 +94,17 @@ class CredentialMonitor(object):
     def __init__(self, cred_dir):
         self.cred_dir = cred_dir
         self.schedd = False
-        self._private_key_location = htcondor.param.get('SCITOKEN_PRIVATE_KEY', None)
-        if self._private_key_location != None or os.path.exists(self._private_key_location):
-            with open(self._private_key_location, 'r') as private_key:
-                self._private_key = private_key.read()
-            self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
+        if htcondor != None:
+            self._private_key_location = htcondor.param.get('SCITOKEN_PRIVATE_KEY', None)
+            if self._private_key_location != None or os.path.exists(self._private_key_location):
+                with open(self._private_key_location, 'r') as private_key:
+                    self._private_key = private_key.read()
+                self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
+            self._is_schedd()
+        else:
+            self._private_key_location = None
         
-        self._is_schedd()
+
         self.log = logging.getLogger('credmon.monitor')
         self.debug = True
 
@@ -290,6 +299,8 @@ def main():
     """
     logger = setup_logging()
     logger.info('Starting Credmon and registering signals')
+    if htcondor == None or scitokens == None:
+        logger.info("I think I'm on a worker node because either htcondor or scitokens library was not found")
     signal.signal(signal.SIGHUP, partial(signal_handler, logger))
     signal.signal(signal.SIGTERM, partial(signal_handler, logger))
     signal.signal(signal.SIGINT, partial(signal_handler, logger))
