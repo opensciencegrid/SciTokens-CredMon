@@ -1,4 +1,15 @@
 #!/usr/bin/python
+"""
+This CredMon uses the Condor configuration in order to configure itself.
+Additional configuration needed is:
+
+- SCITOKEN_PRIVATE_KEY      Location of the PEM formatted Private Key
+- SCITOKEN_PRIVATE_KEY_ID   Private key id on the remote host
+
+"""
+
+
+
 import os
 import sys
 import pwd
@@ -22,7 +33,7 @@ def setup_logging():
     """
     logger = logging.getLogger('credmon')
     logger.setLevel(logging.INFO)
-    log_file = htcondor.param.get('SCITOKEN_CREDMON_LOG', '/var/log/condor/credmon.log')
+    log_file = htcondor.param.get('SEC_CREDENTIAL_MONITOR_LOG', '/var/log/condor/credmon.log')
     cred_lfh = handlers.WatchedFileHandler(log_file)
     cred_lfh.setLevel(logging.DEBUG)
     cred_log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -78,10 +89,11 @@ class CredentialMonitor(object):
     def __init__(self, cred_dir):
         self.cred_dir = cred_dir
         self.schedd = False
-        self._private_key_location = htcondor.param['SCITOKEN_PRIVATE_KEY']
-        with open(self._private_key_location, 'r') as private_key:
-            self._private_key = private_key.read()
-        self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
+        self._private_key_location = htcondor.param.get('SCITOKEN_PRIVATE_KEY', None)
+        if self._private_key_location != None or os.path.exists(self._private_key_location):
+            with open(self._private_key_location, 'r') as private_key:
+                self._private_key = private_key.read()
+            self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
         
         self._is_schedd()
         self.log = logging.getLogger('credmon.monitor')
@@ -194,6 +206,10 @@ class CredentialMonitor(object):
         """
         Create the SciToken
         """
+        if self._private_key_location == None:
+            target_file = os.path.join(base, '{0}.cc'.format(username))
+            return self.atomic_rename(cred_path, target_file)
+        
         token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
         token.update_claims({'sub': username})
         user_path = os.path.join('/user', username)
@@ -278,7 +294,10 @@ def main():
     signal.signal(signal.SIGTERM, partial(signal_handler, logger))
     signal.signal(signal.SIGINT, partial(signal_handler, logger))
     signal.signal(signal.SIGQUIT, partial(signal_handler, logger))
-    credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
+    if len(sys.argv) > 1:
+        credential_dir = sys.argv[1]
+    else:
+        credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
     credmon = CredentialMonitor(credential_dir)
     credmon.drop_pid()
     credmon.credmon_incomplete()
