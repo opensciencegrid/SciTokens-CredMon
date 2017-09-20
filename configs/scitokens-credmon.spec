@@ -6,13 +6,8 @@ Summary: SciTokens enabled CredMon for HTCondor
 License: Apache 2.0
 URL: https://github.com/opensciencegrid/SciTokens-CredMon
 
-# tarball generation:
-# ------------------- 
-# cd ~/rpmbuild/SOURCES
-# git clone --depth=1 https://github.com/opensciencegrid/SciTokens-CredMon
-# mv SciTokens-CredMon scitokens-credmon
-# rm -rf scitokens-credmon/.git*
-# tar -cvzf scitokens-credmon-0.1.0.tar.gz scitokens-credmon
+# Generated from:
+# git archive v%{version} --prefix=scitokens-credmon-%{version}/ | gzip -7 > ~/rpmbuild/SOURCES/scitokens-credmon-%{version}.tar.gz
 Source0: scitokens-credmon-0.1.0.tar.gz
 
 BuildArch: noarch
@@ -32,7 +27,7 @@ the CredMon assumes it is on the Submitter. Otherwise, it is assumed to be on
 the execute node.
 
 %prep
-%setup -q -n scitokens-credmon
+%setup -q
 
 %build
 
