@@ -184,7 +184,7 @@ class CredentialMonitor(object):
             except OSError as ose:
                 self.log.info(ose)
 
-    def atomic_rename(self, tmp_file, target_file, username):
+    def atomic_rename(self, tmp_file, target_file):
         """
         If successful HTCondor will only be dealing with fully prepared and
         usable credential cache files.
@@ -200,9 +200,8 @@ class CredentialMonitor(object):
             os.chmod(tmp_file, stat.S_IRUSR)
             os.chown(tmp_file, 0, 0)
             os.rename(tmp_file, target_file)
-        except OSError:
-            er_msg = 'No cred file for user {0}. TGT Acquire failed.'
-            self.log.error(er_msg.format(username))
+        except OSError as ose:
+            self.log.error(str(ose))
             return False
         return True
 
@@ -225,7 +224,7 @@ class CredentialMonitor(object):
         token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
         token.update_claims({'sub': username})
         user_path = os.path.join('/user', username)
-        token.update_claims({'paths': user_path})
+        token.update_claims({'path': user_path})
         token.update_claims({'authz': ['read', 'write']})
         
         # Serialize the token and write it to a file
@@ -249,7 +248,7 @@ class CredentialMonitor(object):
         # Rename the cred_path (.cred) first, so condor doesn't cause
         # a race condition and start copying over the unprepared .cred right
         # when the .cc file shows up
-        return self.atomic_rename(tmp_file, cred_path, username) and self.atomic_rename(tmp_file2, target_file, username)
+        return self.atomic_rename(tmp_file, cred_path) and self.atomic_rename(tmp_file2, target_file)
 
     def process_cred_file(self, cred_path):
         """
@@ -303,7 +302,10 @@ def main():
     if len(sys.argv) > 1:
         credential_dir = sys.argv[1]
     else:
-        credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
+        if htcondor == None:
+            credential_dir = '/etc/batch_credds'
+        else:
+            credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
     logger = setup_logging(credential_dir)
     logger.info('Starting Credmon and registering signals')
     if htcondor == None or scitokens == None:
