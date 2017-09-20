@@ -44,7 +44,8 @@ to the worker node by the HTCondor Shadow to the HTCondor Starter.
 
 ## Execute Behavior
 
-The CredMon only does 1 operation on the execute host, atomically rename the <username>.cred to <username>.cc.
+The CredMon only does 1 operation on the execute host, copy the <username>.cred to <username>.cc.
+Since the Starter will copy the SciToken <username>.cred file to the execute node, just copy that to the credential.
 
 ## TODO: GlideinWMS Support
 
