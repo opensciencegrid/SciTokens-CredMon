@@ -220,8 +220,9 @@ class CredentialMonitor(object):
         if self._private_key_location == None:
             target_file = os.path.join(base, '{0}.cc'.format(username))
             (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=base)
-            with os.fdopen(cred_path, "w") as open_file, open(cred_file, 'r') as cred_file_obj:
-                open_file.write(cred_file_obj.read())
+            with os.fdopen(cred_path, "w") as open_file, 
+                with open(cred_file, 'r') as cred_file_obj:
+                    open_file.write(cred_file_obj.read())
             return self.atomic_rename(tmp_file, target_file)
         
         token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
