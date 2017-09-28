@@ -198,7 +198,7 @@ class CredentialMonitor(object):
         """
         try:
             os.chmod(tmp_file, stat.S_IRUSR)
-            os.chown(tmp_file, 0, 0)
+            #os.chown(tmp_file, 0, 0)
             os.rename(tmp_file, target_file)
         except OSError as ose:
             self.log.error("Error while atomic renaming: %s" % (str(ose)))
