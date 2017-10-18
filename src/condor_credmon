@@ -228,9 +228,8 @@ class CredentialMonitor(object):
         token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
         token.update_claims({'sub': username})
         user_path = os.path.join('/user', username)
-        token.update_claims({'path': user_path})
-        token.update_claims({'authz': ['read', 'write']})
-        
+        token.update_claims({'scp': ["{}:{}".format(authz, user_path) for authz in ['read', 'write']]})
+
         # Serialize the token and write it to a file
         serialized_token = token.serialize(issuer="https://scitokens.org/osg-connect", lifetime=60*20)
         (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=base)
