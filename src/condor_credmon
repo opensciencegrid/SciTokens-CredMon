@@ -31,6 +31,10 @@ except:
 import tempfile
 import stat
 import traceback
+from web import start_webserver
+from multiprocessing import Process
+import multiprocessing
+import Queue
 
 def setup_logging(credential_dir):
     """
@@ -323,12 +327,24 @@ def main():
     credmon.drop_pid()
     credmon.credmon_incomplete()
     logger.info('Entering main loop')
+    credential_queue = multiprocessing.Queue()
+    webserver = Process(target=start_webserver, args=(credential_queue,))
+    webserver.daemon = True
+    webserver.start()
     while True:
         try:
             credmon.scan_tokens()
         except Exception as unknown:
             logger.exception(unknown)
             logger.error(unknown)
+        
+        # Grab credentials from the queue as well
+        try:
+            credential = credential_queue.get_nowait()
+        except Queue.Empty as empty:
+            # Credential get was empty, so ignore
+            pass
+            
         logger.info('Sleeping 60 seconds.')
         time.sleep(60)
 
