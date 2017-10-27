@@ -37,6 +37,7 @@ $(document).ready(function(){
     $("#boxtest").click(function() {
         var button = $(this);
         button.disable(true);
+        button.append(" <i id='box_button_busy' class='fa fa-spinner fa-spin'></i>")
       
         // Send the ajax to test the connection
         $.getJSON("/test_box", function( data ) {
@@ -44,7 +45,7 @@ $(document).ready(function(){
             if(data.status == 1) {
                 // Everything worked
                 if ("sharedLink" in data) {
-                    setSuccess(data.statusMessage + ": <a href=\"" + data.sharedLink + "\">" + data.sharedLink + "</a>");
+                    setSuccess(data.statusMessage + ": <a href=\"" + data.sharedLink + "\" target='_blank' >" + data.sharedLink + "</a>");
                 } else {
                     setSuccess(data.statusMessage);
                 }
@@ -52,12 +53,14 @@ $(document).ready(function(){
                 // Something failed
                 setError(data.statusMessage);
             }
+            $('#box_button_busy').remove()
             button.disable(false);
           
           
         })
         .fail(function(jqXHR, textStatus, errorThrown) {
             setError(textStatus);
+            $('#box_button_busy').remove()
             button.disable(false);
         })
       
