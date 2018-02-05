@@ -24,15 +24,11 @@ to the <username>'s stash directory.
 An example SciToken payload is:
 
     {
-      "authz": [
-        "read",
-        "write"
-      ],
+      "scp": ["read:/user/dweitzel", "write:/user/dweitzel"],
       "sub": "dweitzel",
       "exp": 1505868419,
       "iat": 1505867219,
       "iss": "https://scitokens.org/osg-connect",
-      "path": "/user/dweitzel",
       "nbf": 1505867219
     }
 
