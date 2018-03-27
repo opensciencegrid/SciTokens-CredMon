@@ -21,6 +21,7 @@ from functools import partial
 import signal
 import time
 import fnmatch
+import glob
 try:
     import htcondor
     import scitokens
@@ -213,7 +214,7 @@ class CredentialMonitor(object):
             self.log.error(err.format(t_uid))
 
 
-    def acquire_scitoken(self, cred_path, base, username):
+    def acquire_scitoken(self, cred_path, username):
         """
         Create the SciToken
         """
@@ -232,39 +233,37 @@ class CredentialMonitor(object):
 
         # Serialize the token and write it to a file
         serialized_token = token.serialize(issuer="https://scitokens.org/osg-connect", lifetime=60*20)
-        (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=base)
+        (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=os.path.dirname(cred_path))
         with os.fdopen(tmp_file_obj, "w") as open_file:
             open_file.write(serialized_token)
-            
-        (tmp_file_obj, tmp_file2) = tempfile.mkstemp(dir=base)
+        
+        (tmp_file_obj, tmp_file2) = tempfile.mkstemp(dir=os.path.dirname(cred_path))
         with os.fdopen(tmp_file_obj, "w") as open_file:
             open_file.write(serialized_token)
 
-        target_file = os.path.join(base, '{0}.cc'.format(username))
-        t_pwn = pwd.getpwnam(username)
-        t_uid = t_pwn.pw_uid
-        t_gid = t_pwn.pw_gid
-        self.log.info('Executing under EUID: {0}'.format(t_uid))
-        self.re_own(tmp_file, t_uid, t_gid)
-        self.re_own(tmp_file2, t_uid, t_gid)
+    
+        target_file = os.path.join(os.path.dirname(cred_path), 'scitokens.use')
+        #target_file = os.path.join(self.cred_dir, '{0}.use'.format(username))
         
-        # Rename the cred_path (.cred) first, so condor doesn't cause
-        # a race condition and start copying over the unprepared .cred right
-        # when the .cc file shows up
-        return self.atomic_rename(tmp_file, cred_path) and self.atomic_rename(tmp_file2, target_file)
+        # Rename the tmpfile to the target "scitokens.use" file. 
+        return self.atomic_rename(tmp_file, target_file)
 
     def process_cred_file(self, cred_path):
         """
         Split out the file path to get username and base.
         Pass that data to the SciToken acquiring function.
+
+        Format of cred_path should be:
+        <cred_dir> / <username> / "scitokens.top"
         """
-        base, file_name = os.path.split(cred_path)
-        username = os.path.splitext(file_name)[0]
+        # Take the cred_dir out of the cred_path
+        cred_path_rm = cred_path.replace(self.cred_dir, '')
+        base, file_name = os.path.split(cred_path_rm)
+        username = os.path.basename(base)
         if should_renew(base, username):
             fnd_msg = 'Found {0}, acquiring SciToken and .cc file'
             self.log.info(fnd_msg.format(cred_path))
-            success = self.acquire_scitoken(cred_path, base, username)
-            #success = self.acquire_tgt(cred_path, base, username)
+            success = self.acquire_scitoken(cred_path, username)
             if success:
                 succ_msg = "Successfully renewed SciToken for user: {0}"
                 self.log.info(succ_msg.format(username))
@@ -287,11 +286,13 @@ class CredentialMonitor(object):
         Scan the credential directory for new cc files.
         If found then process the TGT request and delete the old cc file.
         """
-        cc_files = fnmatch.filter(os.listdir(self.cred_dir), '*.cred')
+        top_files = glob.glob(self.cred_dir + '/*/scitokens.top')
+        #cc_files = fnmatch.filter(os.listdir(self.cred_dir), '*.cred')
         real_euid = os.geteuid()
-        for file_name in cc_files:
-            cred_path = os.path.join(self.cred_dir, file_name)
-            self.process_cred_file(cred_path)
+        for file_name in top_files:
+            # Directory name is the user name
+            #cred_path = os.path.join(self.cred_dir, file_name)
+            self.process_cred_file(file_name)
         os.seteuid(real_euid)
         # self.remove_dead_creds()
         os.seteuid(real_euid)
