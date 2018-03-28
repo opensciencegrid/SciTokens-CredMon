@@ -33,6 +33,14 @@ import tempfile
 import stat
 import traceback
 
+# Convert .top to *.use
+# on worker node:
+# .condor_creds directory in execute directory
+# $_CONDOR_CREDS points to full path of creds 
+# File per module.  For now, only scitokens.  scitokens is just a file with the token
+# condor config TOKENS=TRUE on submit and execute
+# No credmon on execute machine
+
 def setup_logging(credential_dir):
     """
     Set-up logging for the cred monitor.
@@ -71,7 +79,7 @@ def should_renew(base, username):
     renews.
     """
     return True
-    
+
     cc_file = os.path.join(base, '{0}.cc'.format(username))
     if not os.path.exists(cc_file):
         return True
@@ -107,7 +115,6 @@ class CredentialMonitor(object):
             self._is_schedd()
         else:
             self._private_key_location = None
-        
 
         self.log = logging.getLogger('credmon.monitor')
         self.debug = True
@@ -115,7 +122,7 @@ class CredentialMonitor(object):
     def _is_schedd(self):
         try:
             schedd = htcondor.Schedd()
-        except RuntimeError as e:
+        except RuntimeError:
             schedd = None
         self.schedd = schedd
 
@@ -148,43 +155,6 @@ class CredentialMonitor(object):
             os.utime(complete_name, None)
         return
 
-    def get_active_users(self):
-        if not self.schedd:
-            raise NotImplementedError
-        schedd = htcondor.Schedd()
-        all_jobs = schedd.query('true', ['Owner'])
-        active_users = set(job['Owner'] for job in all_jobs)
-        return active_users
-
-    def get_dead_creds(self):
-        all_creds = fnmatch.filter(os.listdir(self.cred_dir), '*.cred')
-        cred_users = set([os.path.splitext(cred)[0] for cred in all_creds])
-        try:
-            active_users = self.get_active_users()
-        except NotImplementedError:
-            return []
-        os.seteuid(0)
-        os.setuid(0)
-        return cred_users.difference(active_users)
-
-    def remove_dead_creds(self):
-        dead_cred_users = self.get_dead_creds()
-        for user in dead_cred_users:
-            cred_file = os.path.join(self.cred_dir, user + '.cred')
-            cc_file = os.path.join(self.cred_dir, user + '.cc')
-            try:
-                os.remove(cred_file)
-                os.remove(cc_file)
-            except OSError as ose:
-                pass
-        mark_files = fnmatch.filter(os.listdir(self.cred_dir), '*.mark')
-        for mark_file in mark_files:
-            mark_path = os.path.join(self.cred_dir, mark_file)
-            try:
-                os.remove(mark_path)
-            except OSError as ose:
-                self.log.info(ose)
-
     def atomic_rename(self, tmp_file, target_file):
         """
         If successful HTCondor will only be dealing with fully prepared and
@@ -202,30 +172,25 @@ class CredentialMonitor(object):
             #os.chown(tmp_file, 0, 0)
             os.rename(tmp_file, target_file)
         except OSError as ose:
-            self.log.error("Error while atomic renaming: %s" % (str(ose)))
+            self.log.error("Error while atomic renaming: %s", str(ose))
             return False
         return True
 
-    def re_own(self, cc_file, t_uid, t_gid):
+    def re_own(self, cred_file, t_uid, t_gid):
+        """
+        Re-own a file as the uid and gid
+        """
         try:
-            os.chown(cc_file, t_uid, t_gid)
+            os.chown(cred_file, t_uid, t_gid)
         except Exception:
-            err = 'Failed to chown tmp cc file to uid {0}'
-            self.log.error(err.format(t_uid))
+            self.log.error('Failed to chown tmp cc file to uid %s', str(t_uid))
 
 
     def acquire_scitoken(self, cred_path, username):
         """
         Create the SciToken
         """
-        if self._private_key_location == None:
-            target_file = os.path.join(base, '{0}.cc'.format(username))
-            (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=base)
-            with os.fdopen(tmp_file_obj, "w") as open_file:
-                with open(cred_path, 'r') as cred_file_obj:
-                    open_file.write(cred_file_obj.read())
-            return self.atomic_rename(tmp_file, target_file)
-        
+
         token = scitokens.SciToken(key=self._private_key, key_id=self._private_key_id)
         token.update_claims({'sub': username})
         user_path = os.path.join('/user', username)
@@ -236,16 +201,10 @@ class CredentialMonitor(object):
         (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=os.path.dirname(cred_path))
         with os.fdopen(tmp_file_obj, "w") as open_file:
             open_file.write(serialized_token)
-        
-        (tmp_file_obj, tmp_file2) = tempfile.mkstemp(dir=os.path.dirname(cred_path))
-        with os.fdopen(tmp_file_obj, "w") as open_file:
-            open_file.write(serialized_token)
 
-    
         target_file = os.path.join(os.path.dirname(cred_path), 'scitokens.use')
-        #target_file = os.path.join(self.cred_dir, '{0}.use'.format(username))
-        
-        # Rename the tmpfile to the target "scitokens.use" file. 
+
+        # Rename the tmpfile to the target "scitokens.use" file.
         return self.atomic_rename(tmp_file, target_file)
 
     def process_cred_file(self, cred_path):
@@ -258,27 +217,15 @@ class CredentialMonitor(object):
         """
         # Take the cred_dir out of the cred_path
         cred_path_rm = cred_path.replace(self.cred_dir, '')
-        base, file_name = os.path.split(cred_path_rm)
+        base, _ = os.path.split(cred_path_rm)
         username = os.path.basename(base)
         if should_renew(base, username):
-            fnd_msg = 'Found {0}, acquiring SciToken and .cc file'
-            self.log.info(fnd_msg.format(cred_path))
+            self.log.info('Found %s, acquiring SciToken and .cc file', cred_path)
             success = self.acquire_scitoken(cred_path, username)
             if success:
-                succ_msg = "Successfully renewed SciToken for user: {0}"
-                self.log.info(succ_msg.format(username))
+                self.log.info("Successfully renewed SciToken for user: %s", username)
             else:
-                err_msg = "Failed to renew SciToken for user: {0}"
-                self.log.error(err_msg.format(username))
-        else:
-            complete_name = os.path.join(self.cred_dir, 'CREDMON_COMPLETE')
-            if not os.path.isfile:
-                # we may have rebooted, and thus need to refresh afs tokens
-                t_pwn = pwd.getpwnam(username)
-                t_uid = t_pwn.pw_uid
-                t_gid = t_pwn.pw_gid
-                for post_act in self.post_actions:
-                    post_act.run(t_uid, t_gid)
+                self.log.error("Failed to renew SciToken for user: %s", username)
 
 
     def scan_tokens(self):
@@ -306,19 +253,19 @@ def main():
     if len(sys.argv) > 1:
         credential_dir = sys.argv[1]
     else:
-        if htcondor == None:
+        if htcondor is None:
             credential_dir = '/etc/batch_credds'
         else:
             credential_dir = htcondor.param.get('SEC_CREDENTIAL_DIRECTORY', '/etc/batch_credds')
     logger = setup_logging(credential_dir)
     logger.info('Starting Credmon and registering signals')
-    if htcondor == None or scitokens == None:
+    if htcondor is None or scitokens is None:
         logger.info("I think I'm on a worker node because either htcondor or scitokens library was not found")
     signal.signal(signal.SIGHUP, partial(signal_handler, logger))
     signal.signal(signal.SIGTERM, partial(signal_handler, logger))
     signal.signal(signal.SIGINT, partial(signal_handler, logger))
     signal.signal(signal.SIGQUIT, partial(signal_handler, logger))
-    
+
     credmon = CredentialMonitor(credential_dir)
     credmon.drop_pid()
     credmon.credmon_incomplete()
@@ -334,4 +281,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
