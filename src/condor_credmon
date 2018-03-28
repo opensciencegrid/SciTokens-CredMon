@@ -220,7 +220,7 @@ class CredentialMonitor(object):
         base, _ = os.path.split(cred_path_rm)
         username = os.path.basename(base)
         if should_renew(base, username):
-            self.log.info('Found %s, acquiring SciToken and .cc file', cred_path)
+            self.log.info('Found %s, acquiring SciToken and .use file', cred_path)
             success = self.acquire_scitoken(cred_path, username)
             if success:
                 self.log.info("Successfully renewed SciToken for user: %s", username)
