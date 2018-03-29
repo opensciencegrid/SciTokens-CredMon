@@ -33,6 +33,10 @@ import tempfile
 import stat
 import traceback
 
+
+from threading import Event
+sleeper = Event()
+
 # Convert .top to *.use
 # on worker node:
 # .condor_creds directory in execute directory
@@ -66,6 +70,7 @@ def signal_handler(logger, signum, frame):
     """
     if signum == signal.SIGHUP:
         logger.info('Got SIGHUP: Triggering READ of Credential Directory')
+        sleeper.set()
         return
     exit_msg = 'Got signal {0} at frame {1} terminating.'
     logger.info(exit_msg.format(signum, frame))
@@ -200,7 +205,7 @@ class CredentialMonitor(object):
         serialized_token = token.serialize(issuer="https://scitokens.org/osg-connect", lifetime=60*20)
         (tmp_file_obj, tmp_file) = tempfile.mkstemp(dir=os.path.dirname(cred_path))
         with os.fdopen(tmp_file_obj, "w") as open_file:
-            open_file.write(serialized_token)
+            open_file.write(serialized_token.decode("utf-8"))
 
         target_file = os.path.join(os.path.dirname(cred_path), 'scitokens.use')
 
@@ -277,7 +282,8 @@ def main():
             logger.exception(unknown)
             logger.error(unknown)
         logger.info('Sleeping 60 seconds.')
-        time.sleep(60)
+        sleeper.clear()
+        sleeper.wait(60)
 
 if __name__ == '__main__':
     main()
