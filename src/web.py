@@ -8,22 +8,132 @@ import requests
 import json
 from urlparse import urlparse
 from utils import ReadConfiguration, GetProviders, GetProviderOptions
+import htcondor
+import classad
+import re
+
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+# create a file handler
+handler = logging.FileHandler('/tmp/hello.log')
+handler.setLevel(logging.DEBUG)
+
+# create a logging format
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+# add the handlers to the logger
+logger.addHandler(handler)
+
+class LoggerWriter:
+    def __init__(self, level):
+        # self.level is really like using log.debug(message)
+        # at least in my case
+        self.level = level
+
+    def write(self, message):
+        # if statement reduces the amount of newlines that are
+        # printed to the logger
+        if message != '\n':
+            self.level(message)
+
+    def flush(self):
+        # create a flush method so things can be flushed when
+        # the system wants to. Not sure if simply 'printing'
+        # sys.stderr is the correct way to do it, but it seemed
+        # to work properly for me.
+        self.level(sys.stderr)
+
+# Send stdout to the logging
+import sys
+sys.stdout = LoggerWriter(logger.debug)
+sys.stderr = LoggerWriter(logger.warning)
 
 app = Flask(__name__)
 app.secret_key = ':a\xfdq\x8b.\xc9\x96\xc1\x96K\xc3\xceJ\x12\x98\xa2\x81\xc4\xa50\xfa\x82\n'
-redirect_uri = "https://osgsubmit.unl.edu/boxreturn"
+redirect_uri = "https://hackathon.scitokens.org/boxreturn"
+
+
 
 credential_queue = None
 
 @app.route('/')
 def index():
     
-    # Get the username
-    auth = request.authorization
-    username = auth.username
-    session['local_username'] = username
+    return render_template('no_key.html')
+
+
+@app.route('/key/<key>')
+def key(key):
+    # Get the key from URL
+    # Sanitize the key
+    if not re.match("[0-9a-fA-F]+", key):
+        raise Exception("Key Id is not valid")
+
+    # Check for the file in the credmon directory
+    cred_dir = htcondor.param['SEC_CREDENTIAL_DIRECTORY']
+    key_path = os.path.join(cred_dir, key)
+    if not os.path.exists(key_path):
+        raise Exception("Key doesn't exist")
     
+    # Read in the key file
+    with open(key_path, 'r') as key_file:
+        request_profile = classad.parseOne(key_file)
+
+    # Get the owner, provider, and scopes
+    provider = request_profile['provider']
+    user = request_profile['user']
+    #scope = request_profile['scope']
+
+    session['local_username'] = user
     return render_template('index.html')
+
+
+@app.route('/surgecallback')
+def surge_callback():
+    logger.info("Got callback from surge")
+    surge_client_id = GetProviderOptions("surge", "client_id")
+    # Surge requires a redirect_uri, which is different than the Box behavior
+    oauth = OAuth2Session(surge_client_id, state=session['oauth_state'], redirect_uri="https://hackathon.scitokens.org/surgecallback")
+    
+    # Convert http url to https
+    if not request.url.startswith("https"):
+        updated_url = "https" + request.url[4:]
+    else:
+        updated_url = request.url
+
+    surge_client_secret = GetProviderOptions("surge", "client_secret")
+    logger.info("Got surge client secret: %s" % surge_client_secret)
+    try:
+        token = oauth.fetch_token(
+           'https://surge.ncsa.illinois.edu/scitokens-server/token',
+           authorization_response=updated_url,
+           # Google specific extra parameter used for client
+           # authentication
+           client_secret=surge_client_secret)
+    except Exception as e:
+        logger.exception(e)
+    
+    logger.info("Got token: %s" % token)
+    session['surge_token'] = json.dumps(token)
+    return "Token: %s" % token
+
+@app.route('/surgelogin')
+def surge_login():
+    logger.info("At surge login")
+    surge_client_id = GetProviderOptions("surge", "client_id")
+    logger.info("Got client id: %s" % surge_client_id)
+
+    oauth = OAuth2Session(surge_client_id, redirect_uri="https://hackathon.scitokens.org/surgecallback")
+    authorization_url, state = oauth.authorization_url("https://surge.ncsa.illinois.edu/scitokens-server/authorize")
+    logger.info("Got auth_url: %s" % authorization_url)
+    # State is used to prevent CSRF, keep this for later.
+    session['oauth_state'] = state
+    logger.info("Got state: %s" % state)
+    return redirect(authorization_url)
 
 @app.route('/login')
 def login():
@@ -36,6 +146,7 @@ def login():
     # State is used to prevent CSRF, keep this for later.
     session['oauth_state'] = state
     return redirect(authorization_url)
+
 
 
 @app.route('/boxreturn')
@@ -148,4 +259,4 @@ def start_webserver(queue):
     
 
     #os.environ['OAUTHLIB_INSECURE_TRANSPORT']="1"
-    app.run(debug=True, use_reloader=False, port=8080)
+    app.run(use_reloader=False, port=8080)
