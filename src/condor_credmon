@@ -113,7 +113,7 @@ class CredentialMonitor(object):
         self.schedd = False
         if htcondor != None:
             self._private_key_location = htcondor.param.get('SCITOKEN_PRIVATE_KEY', None)
-            if self._private_key_location != None or os.path.exists(self._private_key_location):
+            if self._private_key_location != None and os.path.exists(self._private_key_location):
                 with open(self._private_key_location, 'r') as private_key:
                     self._private_key = private_key.read()
                 self._private_key_id = htcondor.param['SCITOKEN_PRIVATE_KEY_ID']
