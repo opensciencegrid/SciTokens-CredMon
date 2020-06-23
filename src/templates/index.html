@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% block body %}
+
+
+<div class="jumbotron jumbotron-fluid">
+  <div class="container">
+    <h1 class="display-3">Service Providers</h1>
+    <p class="lead">Logging into the below service providers allows HTCondor to manage the credentials for those providers.  HTCondor can then read &amp; write into the resources provided by these service providers.</p>
+  </div>
+</div>
+
+<div class="container">
+  <div class="row">
+    <div class="col-12">
+
+      <div class="card" style="width: 20rem;">
+        <img class="card-img-top center" src="{{ url_for('static', filename='box_blue.png') }}" alt="Card image cap" style="width:80%;display:block;margin:auto">
+        <div class="card-body">
+          <h4 class="card-title">Box Login</h4>
+          {% if 'box' in session and session['box'] == True %}
+          Logged in as: {{ session['box_username'] }}
+          <button type="button" id="boxtest" class="btn btn-info">Test</button>
+          {% else %}
+          <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-12">
+      <div class="alert alert-danger invisible" id="alertmessage" role="alert">
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
